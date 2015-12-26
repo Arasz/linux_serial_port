@@ -89,7 +89,6 @@ namespace mrobot
 	class serial_port
 	{
 	public:
-		serial_port();
 		serial_port(string device, baudrate_option baudrate = baudrate_option::b9600, data_bits_option data_bits = data_bits_option::eight,
 				parity_option parity = parity_option::none, stop_bits_option stop_bits=stop_bits_option::one);
 		virtual ~serial_port();
@@ -97,12 +96,11 @@ namespace mrobot
 		void open_device(string device); /// Open serial port device file
 		void configure(baudrate_option baudrate, data_bits_option data_bits,
 				parity_option parity, stop_bits_option stop_bits); /// Configure opened serial port
-		void send_data(vector<char>& input_buffer);
-		void receive_data(vector<char>& output_buffer);
+		void send_data(char* buffer, int length);
+		int receive_data(char* buffer, int length);
 
 	private:
 		const string _device; /// Path to device
-		const int _max_read_bytes_amount = 20; /// Defines maximum amount of bytes with read() can read at once
 		int _file_descriptor; /// Device file descriptor
 	};
 } /* namespace mrobot */

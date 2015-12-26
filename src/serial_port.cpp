@@ -11,11 +11,6 @@ namespace mrobot
 {
 
 
-serial_port::serial_port():serial_port("/dev/ttyAMA0")
-{
-
-}
-
 serial_port::serial_port(string device, baudrate_option baudrate, data_bits_option data_bits,
 		parity_option parity, stop_bits_option stop_bits): _device(device)
 {
@@ -34,9 +29,16 @@ serial_port::serial_port(string device, baudrate_option baudrate, data_bits_opti
 
 serial_port::~serial_port()
 {
-	// TODO Auto-generated destructor stub
+	close(_file_descriptor);
 }
 
+/**
+ * @brief Opens tty (serial) device given in input argument
+ * By default blocking behavior is enabled.
+ *
+ * @param device serial device name
+ * @throws serial_port_exception
+ */
 void serial_port::open_device(string device)
 {
 	/* File open flags: opens port for rw, port never becomes controlling
@@ -47,11 +49,21 @@ void serial_port::open_device(string device)
 	_file_descriptor = open(_device.c_str(), file_flags);
 	if(_file_descriptor == -1)
 	{
-		throw serial_port_exception{"serial_port::open_device():\nSystem function open() can't open file ",_file_descriptor, file_flags};
+		throw serial_port_exception{"serial_port::open_device():\nSystem function open() can't open file.\n",_file_descriptor, file_flags};
 	}
-	// fcntl(fd, F_SETFL, 0); // enable blocking behavior
+	fcntl(_file_descriptor, F_SETFL, 0); // enable blocking behavior
 }
-
+/**
+ *
+ * @brief Configures tty ( serial ) device.
+ *
+ * @param baudrate device baud rate
+ * @param data_bits number of data bits
+ * @param parity parity check
+ * @param stop_bits number of stop bits
+ *
+ * @throws serial_port_exception
+ */
 void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits, parity_option parity, stop_bits_option stop_bits)
 {
 	// structure used to tty device configuration
@@ -60,13 +72,13 @@ void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits
 	// check if file descriptor is pointing to tty device
 	if(!isatty(_file_descriptor))
 	{
-		throw serial_port_exception{"serial_port::configure():\nOpened file isn't tty device", _file_descriptor};
+		throw serial_port_exception{"serial_port::configure():\nOpened file isn't tty device\n", _file_descriptor};
 	}
 
 	// get current configuration of the serial interface
 	if(tcgetattr(_file_descriptor, &config)<0)
 	{
-		throw serial_port_exception{"serial_port::configure():\nCannot get serial interface configuration", _file_descriptor};
+		throw serial_port_exception{"serial_port::configure():\nCannot get serial interface configuration\n", _file_descriptor};
 	}
 
 	 // Input flags - Turn off input processing
@@ -132,13 +144,13 @@ void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits
 	 // communication speed
 	 if(cfsetispeed(&config,static_cast<unsigned int>(baudrate)) < 0 || cfsetospeed(&config, static_cast<unsigned int>(baudrate)) < 0)
 	 {
-		 throw serial_port_exception{"serial_port::configure():\nError when setting baud rate.", _file_descriptor};
+		 throw serial_port_exception{"serial_port::configure():\nError when setting baud rate.\n", _file_descriptor};
 	 }
 
 	 // apply the configuration ( flush buffers and apply )
 	 if(tcsetattr(_file_descriptor, TCSAFLUSH, &config) < 0)
 	 {
-		 throw serial_port_exception{"serial_port::configure():\nCannot apply new configuration.", _file_descriptor};
+		 throw serial_port_exception{"serial_port::configure():\nCannot apply new configuration.\n", _file_descriptor};
 	 }
 
 }
@@ -154,26 +166,15 @@ void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits
  * @param input_buffer holds data to send
  * @throws serial_port_exception
  */
-void serial_port::send_data(vector<char>& input_buffer)
+void serial_port::send_data(char* buffer, int length)
 {
-	auto iterator = input_buffer.begin();
-
-	// data from char array can be sent all at once
-	char tmp[input_buffer.size()];
-	int elements_counter{0};
-
-	while(iterator != input_buffer.end())
-	{
-		tmp[elements_counter++]=*iterator;
-	}
 	// write data to file
-	int written_bytes = write(_file_descriptor,&tmp,++elements_counter);
+	int written_bytes = write(_file_descriptor, buffer, length);
 
 	if(written_bytes < 0)
-		throw serial_port_exception{"serial_port::send_data():\nError when sending data.", _file_descriptor};
-	else if(written_bytes < elements_counter)
-		throw serial_port_exception{"serial_port::send_data():\nLess elements written than expected.", _file_descriptor};
-	input_buffer.clear(); // flush buffer if write operation is successful
+		throw serial_port_exception{"serial_port::send_data():\nError when sending data.\n", _file_descriptor};
+	else if(written_bytes < length)
+		throw serial_port_exception{"serial_port::send_data():\nLess elements written than expected.\n", _file_descriptor};
 }
 /**
  * @brief Receives data from serial port
@@ -185,23 +186,16 @@ void serial_port::send_data(vector<char>& input_buffer)
  *
  * @param output_buffer holds received data
  * @throws serial_port_exception
+ * @return read bytes count
  */
-void serial_port::receive_data(vector<char>& output_buffer)
+int serial_port::receive_data(char* buffer, int length)
 {
-	char tmp[_max_read_bytes_amount];
 
-	int read_bytes = read(_file_descriptor,&tmp, _max_read_bytes_amount);
+	int read_bytes = read(_file_descriptor, buffer, length);
 
 	if(read_bytes < 0)
 		throw serial_port_exception{"serial_port::receive_data():\nError when reading data from serial port", _file_descriptor};
-
-	for(int i=0; i< read_bytes; i++)
-		output_buffer.push_back(tmp[i]);
-
-	// there is more data to read
-	if((read_bytes>0)&&(read_bytes<=_max_read_bytes_amount))
-		receive_data(output_buffer);
-
+	return read_bytes;
 }
 
 } /* namespace mrobot */
