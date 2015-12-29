@@ -59,9 +59,22 @@ void action_test()
 	parity_option parity = parity_option::none;
 	stop_bits_option stop_bits = stop_bits_option::one;
 
+	char buffer[20];
+
 	try
 	{
 		serial_port serial_device(name, baud, data, parity, stop_bits);
+
+		serial_device.send_data("START ECHO TEST: \n", 19);
+
+		int total_bytes_count = 0;
+
+		while(total_bytes_count < 65)
+		{
+			int bytes_count = serial_device.receive_data(buffer, 10);
+			serial_device.send_data(buffer, bytes_count);
+			total_bytes_count+=bytes_count;
+		}
 	}
 	catch(serial_port_exception& ex)
 	{
@@ -73,6 +86,9 @@ void action_test()
 
 int main()
 {
+	default_config_test();
+	config_test();
+	action_test();
 	return 0;
 }
 
