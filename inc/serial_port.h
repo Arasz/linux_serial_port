@@ -13,95 +13,80 @@
 #include <fcntl.h> // File control library
 #include <sys/types.h> // System data types
 #include <sys/stat.h> // Defines the structure of the data returned by the function stat() ( file status)
+#include <sys/unistd.h>
 #include <string>
+#include <cstring>
 #include <iostream>
 #include <exception>
-#include <unistd.h>
+#include <sys/ioctl.h>
 #include <vector>
+#include "serial_port_exception.h"
+#include "serial_port_util.h"
+#include <errno.h>
+#include <functional>
+#include <thread>
+#include <sys/poll.h>
+#include <mutex>
+#include <chrono>
 
 namespace mrobot
 {
-	using namespace std;
-
-	enum class parity_option
-	{
-		odd, // Parity bit is set to 1 if the number of ones in a given set is odd
-		even, // Parity bit is set to 0 if the number of ones in a given set is even
-		none, // No parity checking
-	};
-
-	enum class stop_bits_option
-	{
-		one,
-		two,
-	};
-
-	enum class data_bits_option
-	{
-		six = CS6,
-		seven = CS7,
-		eight = CS8,
-	};
-
-	enum class baudrate_option
-	{
-		b0 = B0,
-		b50 = B50,
-		b75 = B75,
-		b110 = B110,
-		b134 = B134,
-		b150 = B150,
-		b220 = B200,
-		b300 = B300,
-		b600 = B600,
-		b1200 = B1200,
-		b1800 = B1800,
-		b2400 = B2400,
-		b4800 = B4800,
-		b9600 = B9600,
-		b19200 = B19200,
-		b38400 = B38400,
-		b57600 = B57600,
-		b115200	= B1152000,
-	};
-
-
-	/**
-	 * @brief  Represents exceptions during operation on files
-	 */
-	class serial_port_exception: public exception
-	{
-		//TODO: Add more parameters to file exception (fd, flags,...)
-	public:
-		serial_port_exception(string message, int file_descriptor=0, int flags =0):
-			_message(message),_file_descriptor(file_descriptor){}
-
-		const char* what() const throw() override {return _message.c_str();}
-		const int file_descriptor(){return _file_descriptor;}
-	private:
-		const string _message;
-		const int _file_descriptor;
-	};
-
 	/**
 	 * @brief Class with allows easy serial port communication in linux.
 	 */
 	class serial_port
 	{
 	public:
-		serial_port(string device, baudrate_option baudrate = baudrate_option::b9600, data_bits_option data_bits = data_bits_option::eight,
+
+		using data_ready_event_handler = std::function<void(serial_port&, std::vector<char>&)>;
+
+		serial_port(std::string device, baudrate_option baudrate = baudrate_option::b9600, data_bits_option data_bits = data_bits_option::eight,
 				parity_option parity = parity_option::none, stop_bits_option stop_bits=stop_bits_option::one);
 		virtual ~serial_port();
 
-		void open_device(string device); /// Open serial port device file
+		void open_device(std::string device);
 		void configure(baudrate_option baudrate, data_bits_option data_bits,
-				parity_option parity, stop_bits_option stop_bits); /// Configure opened serial port
-		void send_data(char* buffer, int length);
-		int receive_data(char* buffer, int length);
+				parity_option parity, stop_bits_option stop_bits);
+
+		void send_data(const std::vector<char>& buffer);
+		int is_data_ready();
+		void receive_data(std::vector<char>& buffer);
+		void set_min_data_to_read(int min_data_to_read_count){_min_data_to_read_count = min_data_to_read_count;};
+
+		void subscribe_data_ready_event(data_ready_event_handler& event_handler);
+		void unsubscribe_data_ready_event();
+
+		bool is_ready(){ return _is_opend&&_is_configured;}
+		bool is_open(){ return _is_opend; }
+		bool is_configured() { return _is_configured; }
 
 	private:
-		const string _device; /// Path to device
-		int _file_descriptor; /// Device file descriptor
+		std::mutex _send_data_mutex;
+
+		void read_data();
+		const int _data_buffer_size = 60;
+		int _min_data_to_read_count = -1; ///
+		std::vector<char> _received_data_buffer{static_cast<char>(_data_buffer_size), 0}; /// data buffer which received data
+
+		void check_file_for_data();
+		bool _are_poll_objects_initialized = false;
+		const int _observed_sockets_count = 1; /// amount of fd which are polled by poll()
+		int _sleep_time = 1;
+		int _timeout = 500; /// time in ms after which poll function() terminates (if negative function never terminates)
+		pollfd _ufds[1]; /// array of structs representing socket descriptor used in fd polling
+
+		bool _is_data_ready_event_subscribed = false; /// indicates that data ready event is subscribed
+		data_ready_event_handler _data_ready_event_handler; /// function called when data ready event occurs
+
+		std::thread _check_data_ready; /// thread in which we're checking if data is ready to read
+		bool _thread_started = false;
+
+		bool _is_opend = false;
+		bool _is_configured = false;
+
+		const std::string _device; /// path to device
+		std::mutex _fd_mutex; /// blocks when thread has access to file
+		int _file_descriptor; /// device file descriptor
 	};
 } /* namespace mrobot */
 

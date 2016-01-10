@@ -48,6 +48,31 @@ void config_test()
 	cout<<"config_test() succeed"<<endl;
 }
 
+void echo(mrobot::serial_port& serial_device, std::vector<char>& data)
+{
+	using namespace mrobot;
+	if(serial_device.is_ready())
+	{
+		try
+		{
+			std::cout<<"Sent data: ";
+			for(char&c:data)
+			{
+				std::cout<<c;
+			}
+			std::cout<<"\n";
+
+			serial_device.send_data(data);
+		}
+		catch(serial_port_exception& ex)
+		{
+			std::cerr<<ex.what()<<std::endl;
+		}
+	}
+}
+
+
+
 void action_test()
 {
 	using namespace std;
@@ -59,22 +84,72 @@ void action_test()
 	parity_option parity = parity_option::none;
 	stop_bits_option stop_bits = stop_bits_option::one;
 
-	char buffer[20];
+	try
+	{
+		serial_port serial_device(name, baud, data, parity, stop_bits);
+
+		serial_port::data_ready_event_handler read_data_handler = echo;
+		serial_device.subscribe_data_ready_event(read_data_handler);
+
+
+		vector<char> buffer {'S','T','A','R','T',' ','E','C','H','O',' ','T','E','S','T',':',' ','\n'};
+
+		cout<<serial_device.is_open()<<endl;
+		cout<<serial_device.is_configured()<<endl;
+		cout<<serial_device.is_ready()<<endl;
+
+		if(serial_device.is_ready())
+			serial_device.send_data(buffer);
+		while(true)
+		{
+
+		}
+
+	}
+	catch(serial_port_exception& ex)
+	{
+		cout<<"action_test() failed - exception was thrown: "<<ex.what()<<endl;
+		return;
+	}
+	cout<<"action_test() succeed"<<endl;
+}
+
+void action_test_2()
+{
+	using namespace std;
+	using namespace mrobot;
+
+	string name = "/dev/ttyS98";
+	baudrate_option baud = baudrate_option::b115200;
+	data_bits_option data = data_bits_option::eight;
+	parity_option parity = parity_option::none;
+	stop_bits_option stop_bits = stop_bits_option::one;
 
 	try
 	{
 		serial_port serial_device(name, baud, data, parity, stop_bits);
 
-		serial_device.send_data("START ECHO TEST: \n", 19);
+		//serial_port::data_ready_event_handler read_data_handler = echo;
+		//serial_device.subscribe_data_ready_event(read_data_handler);
 
-		int total_bytes_count = 0;
 
-		while(total_bytes_count < 65)
+		vector<char> buffer {'S','T','A','R','T',' ','E','C','H','O',' ','T','E','S','T',':',' ','\n'};
+
+		if(serial_device.is_ready())
+			serial_device.send_data(buffer);
+		while(serial_device.is_ready())
 		{
-			int bytes_count = serial_device.receive_data(buffer, 10);
-			serial_device.send_data(buffer, bytes_count);
-			total_bytes_count+=bytes_count;
+			if(serial_device.is_data_ready()>0)
+			{
+				serial_device.receive_data(buffer);
+				cout<<"Received data: ";
+				for(char&c:buffer)
+					cout<<c;
+				cout<<endl;
+				serial_device.send_data(buffer);
+			}
 		}
+
 	}
 	catch(serial_port_exception& ex)
 	{

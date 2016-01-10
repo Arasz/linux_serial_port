@@ -11,24 +11,22 @@ namespace mrobot
 {
 
 
-serial_port::serial_port(string device, baudrate_option baudrate, data_bits_option data_bits,
+serial_port::serial_port(std::string device, baudrate_option baudrate, data_bits_option data_bits,
 		parity_option parity, stop_bits_option stop_bits): _device(device)
 {
-	// Opens device
-	try
-	{
-		open_device(device);
-		configure(baudrate, data_bits, parity, stop_bits);
-	}
-	catch(serial_port_exception& ex)
-	{
-		cerr<<ex.what();
-		throw ex;
-	}
+	open_device(device);
+	configure(baudrate, data_bits, parity, stop_bits);
+
+	// run function which will check fd for data to read in another thread
+	_thread_started = true;
+	_check_data_ready = std::thread{&serial_port::check_file_for_data, this};
 }
 
 serial_port::~serial_port()
 {
+	// when object ends his live join started thread
+	_thread_started = false;
+	_check_data_ready.join();
 	close(_file_descriptor);
 }
 
@@ -39,7 +37,7 @@ serial_port::~serial_port()
  * @param device serial device name
  * @throws serial_port_exception
  */
-void serial_port::open_device(string device)
+void serial_port::open_device(std::string device)
 {
 	/* File open flags: opens port for rw, port never becomes controlling
 	 * terminal of the process, use non blocking I/O.
@@ -49,9 +47,10 @@ void serial_port::open_device(string device)
 	_file_descriptor = open(_device.c_str(), file_flags);
 	if(_file_descriptor == -1)
 	{
-		throw serial_port_exception{"serial_port::open_device():\nSystem function open() can't open file.\n",_file_descriptor, file_flags};
+		throw serial_port_exception{"System function open() can't open file.", strerror(errno)};
 	}
 	fcntl(_file_descriptor, F_SETFL, 0); // enable blocking behavior
+	_is_opend = true;
 }
 /**
  *
@@ -72,13 +71,13 @@ void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits
 	// check if file descriptor is pointing to tty device
 	if(!isatty(_file_descriptor))
 	{
-		throw serial_port_exception{"serial_port::configure():\nOpened file isn't tty device\n", _file_descriptor};
+		throw serial_port_exception("Opened file isn't tty device", strerror(errno));
 	}
 
 	// get current configuration of the serial interface
 	if(tcgetattr(_file_descriptor, &config)<0)
 	{
-		throw serial_port_exception{"serial_port::configure():\nCannot get serial interface configuration\n", _file_descriptor};
+		throw serial_port_exception("Cannot get serial interface configuration", strerror(errno));
 	}
 
 	 // Input flags - Turn off input processing
@@ -144,58 +143,184 @@ void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits
 	 // communication speed
 	 if(cfsetispeed(&config,static_cast<unsigned int>(baudrate)) < 0 || cfsetospeed(&config, static_cast<unsigned int>(baudrate)) < 0)
 	 {
-		 throw serial_port_exception{"serial_port::configure():\nError when setting baud rate.\n", _file_descriptor};
+		 throw serial_port_exception("Error when setting baud rate.", strerror(errno));
 	 }
 
 	 // apply the configuration ( flush buffers and apply )
 	 if(tcsetattr(_file_descriptor, TCSAFLUSH, &config) < 0)
 	 {
-		 throw serial_port_exception{"serial_port::configure():\nCannot apply new configuration.\n", _file_descriptor};
+		 throw serial_port_exception("Cannot apply new configuration.", strerror(errno));
 	 }
-
+	 _is_configured = true;
 }
+
 
 /**
  * @brief Sends data through serial port
  *
- * This function counts data in input_buffer, then
+ * This function counts data in buffer, then
  * creates temporary char array with will hold all input data.
  * After input data is copied to array it will be written to
  * serial device file by system function write(). If write
  * is successful buffer will be flushed.
- * @param input_buffer holds data to send
+ * @param buffer holds data to send
  * @throws serial_port_exception
  */
-void serial_port::send_data(char* buffer, int length)
+void serial_port::send_data(const std::vector<char>& buffer)
 {
+	std::unique_lock<std::mutex> lock{_fd_mutex};
+
+	int length = buffer.size();
+	char out_buffer[length];
+
+	int i = 0;
+	for (const char&c : buffer)
+	{
+		out_buffer[i++] = c;
+	}
+
 	// write data to file
-	int written_bytes = write(_file_descriptor, buffer, length);
+	int written_bytes = write(_file_descriptor, out_buffer, length);
 
-	if(written_bytes < 0)
-		throw serial_port_exception{"serial_port::send_data():\nError when sending data.\n", _file_descriptor};
-	else if(written_bytes < length)
-		throw serial_port_exception{"serial_port::send_data():\nLess elements written than expected.\n", _file_descriptor};
+	std::cerr << "DEBUG: INSIDE SEND FUNCTION " << "WRITTEN BYTES: "
+			<< written_bytes << std::endl;
+
+	if (written_bytes < 0)
+		throw serial_port_exception("Error when sending data.",
+				strerror(errno));
+	else if (written_bytes < length)
+		throw serial_port_exception("Less elements written than expected.",
+				strerror(errno));
 }
-/**
- * @brief Receives data from serial port
- *
- * This function creates buffer of size defined
- * in '_max_read_bytes_amount then reads data
- * from serial device. If there is more data to
- * read, this function is called recurrently.
- *
- * @param output_buffer holds received data
- * @throws serial_port_exception
- * @return read bytes count
- */
-int serial_port::receive_data(char* buffer, int length)
-{
 
-	int read_bytes = read(_file_descriptor, buffer, length);
+
+/**
+ * @brief Subscribe data ready event
+ * @param event_handler function which will handle data ready event
+ */
+void serial_port::subscribe_data_ready_event(data_ready_event_handler& event_handler)
+{
+	if(!_is_data_ready_event_subscribed)
+	{
+		_data_ready_event_handler = event_handler;
+		_is_data_ready_event_subscribed = true;
+	}
+}
+
+void serial_port::unsubscribe_data_ready_event()
+{
+	if(_is_data_ready_event_subscribed)
+	{
+		_is_data_ready_event_subscribed = false;
+	}
+}
+
+/**
+ * @brief Read data from serial port
+ */
+void serial_port::read_data()
+{
+	std::unique_lock<std::mutex> lock{_fd_mutex};
+
+	char read_buffer[_data_buffer_size];
+	std::memset(read_buffer, 0, _data_buffer_size);
+
+	int read_bytes = read(_file_descriptor, read_buffer, _data_buffer_size);
 
 	if(read_bytes < 0)
-		throw serial_port_exception{"serial_port::receive_data():\nError when reading data from serial port", _file_descriptor};
-	return read_bytes;
+		throw serial_port_exception{"Error when reading data from serial port", strerror(errno)};
+
+	_received_data_buffer.clear();
+	for(int i = 0; i<read_bytes; i++)
+	{
+		_received_data_buffer.push_back(read_buffer[i]);
+	}
+}
+
+/**
+ * @brief Checks if there is data ready to read.
+ * @return size of data to read in bytes
+ */
+int serial_port::is_data_ready()
+{
+	// data ready to read
+	int bytes = 0;
+
+	ioctl(_file_descriptor, FIONREAD, &bytes); // check number of bytes ready to read
+
+	return bytes;
+}
+
+/**
+ * @brief Reads data from serial port
+ * @param buffer received data buffer
+ */
+void serial_port::receive_data(std::vector<char>& buffer)
+{
+	std::unique_lock<std::mutex> lock{_fd_mutex};
+
+	int buffer_size = buffer.size();
+	char read_buffer[buffer_size];
+	std::memset(read_buffer, 0, buffer_size);
+
+	int read_bytes = read(_file_descriptor, read_buffer, buffer_size);
+
+	if(read_bytes < 0)
+		throw serial_port_exception{"Error when reading data from serial port", strerror(errno)};
+
+	buffer.clear();
+	for(int i = 0; i<read_bytes; i++)
+	{
+		buffer.push_back(read_buffer[i]);
+	}
+}
+
+/**
+ * @brief Check if serial port buffer has new data to read and calls data ready to read event handler
+ *
+ *  */
+void serial_port::check_file_for_data()
+{
+	using namespace std::chrono;
+	//TODO exception is thrown in another thread and is not easy catchable - repair
+	while(_thread_started&&_is_data_ready_event_subscribed)
+	{
+		//std::cerr<<"DEBUG: IN NEW THREAD\n";
+
+		if(is_ready())
+		{
+			if(!_are_poll_objects_initialized)
+			{
+				_ufds[0].fd = _file_descriptor;
+				_ufds[0].events = POLLIN; // alert when data is ready to read
+				_are_poll_objects_initialized = true;
+			}
+
+			std::this_thread::sleep_for(seconds{_sleep_time});
+			// events_count equal to zero means timeout
+			int events_count = poll(_ufds, _observed_sockets_count, _timeout );
+
+			if(events_count<0)
+				throw serial_port_exception{"Error when polling client socket.", strerror(errno)};
+			else
+			{
+				if(_ufds[0].revents & POLLIN)
+				{
+					// data ready to read
+					int bytes = is_data_ready();
+
+					if(bytes > _min_data_to_read_count)
+					{
+						read_data();
+						if(_is_data_ready_event_subscribed)
+							_data_ready_event_handler(*this,_received_data_buffer);
+					}
+				}
+			}
+		}
+	}
+	//std::cerr<<"DEBUG: THREAD EXIT\n";
 }
 
 } /* namespace mrobot */
+
