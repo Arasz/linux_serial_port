@@ -16,17 +16,10 @@ serial_port::serial_port(std::string device, baudrate_option baudrate, data_bits
 {
 	open_device(device);
 	configure(baudrate, data_bits, parity, stop_bits);
-
-	// run function which will check fd for data to read in another thread
-	_thread_started = true;
-	_check_data_ready = std::thread{&serial_port::check_file_for_data, this};
 }
 
 serial_port::~serial_port()
 {
-	// when object ends his live join started thread
-	_thread_started = false;
-	_check_data_ready.join();
 	close(_file_descriptor);
 }
 
@@ -168,7 +161,7 @@ void serial_port::configure(baudrate_option baudrate, data_bits_option data_bits
  */
 void serial_port::send_data(const std::vector<char>& buffer)
 {
-	std::unique_lock<std::mutex> lock{_fd_mutex};
+	//std::unique_lock<std::mutex> lock{_fd_mutex};
 
 	int length = buffer.size();
 	char out_buffer[length];
@@ -181,9 +174,6 @@ void serial_port::send_data(const std::vector<char>& buffer)
 
 	// write data to file
 	int written_bytes = write(_file_descriptor, out_buffer, length);
-
-	std::cerr << "DEBUG: INSIDE SEND FUNCTION " << "WRITTEN BYTES: "
-			<< written_bytes << std::endl;
 
 	if (written_bytes < 0)
 		throw serial_port_exception("Error when sending data.",
@@ -220,7 +210,7 @@ void serial_port::unsubscribe_data_ready_event()
  */
 void serial_port::read_data()
 {
-	std::unique_lock<std::mutex> lock{_fd_mutex};
+	//std::unique_lock<std::mutex> lock{_fd_mutex};
 
 	char read_buffer[_data_buffer_size];
 	std::memset(read_buffer, 0, _data_buffer_size);
@@ -257,7 +247,7 @@ int serial_port::is_data_ready()
  */
 void serial_port::receive_data(std::vector<char>& buffer)
 {
-	std::unique_lock<std::mutex> lock{_fd_mutex};
+	//std::unique_lock<std::mutex> lock{_fd_mutex};
 
 	int buffer_size = buffer.size();
 	char read_buffer[buffer_size];
@@ -275,52 +265,18 @@ void serial_port::receive_data(std::vector<char>& buffer)
 	}
 }
 
-/**
- * @brief Check if serial port buffer has new data to read and calls data ready to read event handler
- *
- *  */
-void serial_port::check_file_for_data()
+void serial_port::process_data()
 {
-	using namespace std::chrono;
-	//TODO exception is thrown in another thread and is not easy catchable - repair
-	while(_thread_started&&_is_data_ready_event_subscribed)
-	{
-		//std::cerr<<"DEBUG: IN NEW THREAD\n";
-
-		if(is_ready())
-		{
-			if(!_are_poll_objects_initialized)
-			{
-				_ufds[0].fd = _file_descriptor;
-				_ufds[0].events = POLLIN; // alert when data is ready to read
-				_are_poll_objects_initialized = true;
-			}
-
-			std::this_thread::sleep_for(seconds{_sleep_time});
-			// events_count equal to zero means timeout
-			int events_count = poll(_ufds, _observed_sockets_count, _timeout );
-
-			if(events_count<0)
-				throw serial_port_exception{"Error when polling client socket.", strerror(errno)};
-			else
-			{
-				if(_ufds[0].revents & POLLIN)
-				{
-					// data ready to read
-					int bytes = is_data_ready();
-
-					if(bytes > _min_data_to_read_count)
-					{
-						read_data();
-						if(_is_data_ready_event_subscribed)
-							_data_ready_event_handler(*this,_received_data_buffer);
-					}
-				}
-			}
-		}
-	}
-	//std::cerr<<"DEBUG: THREAD EXIT\n";
+	read_data();
+	if(_is_data_ready_event_subscribed)
+		_data_ready_event_handler(*this,_received_data_buffer);
 }
+
+int serial_port::get_file_descriptor()
+{
+	return _file_descriptor;
+}
+
 
 } /* namespace mrobot */
 

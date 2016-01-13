@@ -7,17 +7,19 @@
 
 #include "serial_port.h"
 #include <string>
+#include "poll_controler.h"
 
 void default_config_test()
 {
 	using namespace std;
+	using namespace mrobot;
 
 	string name = "/dev/ttyS98";
 	try
 	{
-		mrobot::serial_port serial_device{name};
+		serial_port serial_device{name};
 	}
-	catch(mrobot::serial_port_exception& ex)
+	catch(serial_port_exception& ex)
 	{
 		cout<<"default_config_test() failed - exception was thrown: "<<ex.what()<<endl;
 		return;
@@ -87,6 +89,7 @@ void action_test()
 	try
 	{
 		serial_port serial_device(name, baud, data, parity, stop_bits);
+		poll_controler controler;
 
 		serial_port::data_ready_event_handler read_data_handler = echo;
 		serial_device.subscribe_data_ready_event(read_data_handler);
@@ -94,16 +97,18 @@ void action_test()
 
 		vector<char> buffer {'S','T','A','R','T',' ','E','C','H','O',' ','T','E','S','T',':',' ','\n'};
 
-		cout<<serial_device.is_open()<<endl;
-		cout<<serial_device.is_configured()<<endl;
-		cout<<serial_device.is_ready()<<endl;
-
 		if(serial_device.is_ready())
+		{
+			controler.add(&serial_device);
+			controler.start_polling();
 			serial_device.send_data(buffer);
-		while(true)
+		}
+		while(serial_device.is_ready())
 		{
 
 		}
+		controler.start_polling();
+		controler.remove(&serial_device);
 
 	}
 	catch(serial_port_exception& ex)

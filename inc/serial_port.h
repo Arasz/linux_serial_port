@@ -24,17 +24,14 @@
 #include "serial_port_util.h"
 #include <errno.h>
 #include <functional>
-#include <thread>
-#include <sys/poll.h>
-#include <mutex>
-#include <chrono>
+#include "ifile_descriptor_owner.h"
 
 namespace mrobot
 {
 	/**
 	 * @brief Class with allows easy serial port communication in linux.
 	 */
-	class serial_port
+	class serial_port: public ifile_descriptor_owner
 	{
 	public:
 
@@ -60,32 +57,25 @@ namespace mrobot
 		bool is_open(){ return _is_opend; }
 		bool is_configured() { return _is_configured; }
 
+		virtual void process_data() override;
+		virtual int get_file_descriptor() override;
+
 	private:
-		std::mutex _send_data_mutex;
 
 		void read_data();
 		const int _data_buffer_size = 60;
 		int _min_data_to_read_count = -1; ///
 		std::vector<char> _received_data_buffer{static_cast<char>(_data_buffer_size), 0}; /// data buffer which received data
 
-		void check_file_for_data();
-		bool _are_poll_objects_initialized = false;
-		const int _observed_sockets_count = 1; /// amount of fd which are polled by poll()
-		int _sleep_time = 1;
-		int _timeout = 500; /// time in ms after which poll function() terminates (if negative function never terminates)
-		pollfd _ufds[1]; /// array of structs representing socket descriptor used in fd polling
 
 		bool _is_data_ready_event_subscribed = false; /// indicates that data ready event is subscribed
 		data_ready_event_handler _data_ready_event_handler; /// function called when data ready event occurs
-
-		std::thread _check_data_ready; /// thread in which we're checking if data is ready to read
-		bool _thread_started = false;
 
 		bool _is_opend = false;
 		bool _is_configured = false;
 
 		const std::string _device; /// path to device
-		std::mutex _fd_mutex; /// blocks when thread has access to file
+		//std::mutex _fd_mutex; /// blocks when thread has access to file
 		int _file_descriptor; /// device file descriptor
 	};
 } /* namespace mrobot */
